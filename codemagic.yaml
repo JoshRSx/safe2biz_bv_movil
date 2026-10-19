@@ -1,0 +1,121 @@
+workflows:
+  # ---------------------------------------------------------------
+  # ANDROID: APK de prueba (sin credenciales), lanzar a mano
+  # ---------------------------------------------------------------
+  android-test:
+    name: Android APK de prueba
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      java: 17
+    scripts:
+      - name: Dependencias
+        script: flutter pub get
+      - name: Build APK
+        # Debug: firmado con la clave de depuración, se instala directo en el teléfono
+        script: flutter build apk --debug
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk
+    publishing:
+      email:
+        recipients:
+          - joshuarojassaavedra@gmail.com
+        notify:
+          success: true
+          failure: true
+
+  # ---------------------------------------------------------------
+  # ANDROID: AAB firmado -> Google Play (track internal)
+  # ---------------------------------------------------------------
+  android-release:
+    name: Android Release
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      java: 17
+      android_signing:
+        - safe2biz_keystore # Referencia del keystore subido en Codemagic
+      groups:
+        - google_play # GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+    scripts:
+      - name: Generar key.properties
+        script: |
+          # build.gradle solo activa la firma si existe key.properties con storeFile;
+          # en CI los valores reales se leen de CM_KEYSTORE_* (ver android/app/build.gradle).
+          cat > "$CM_BUILD_DIR/android/key.properties" <<EOF
+          storeFile=$CM_KEYSTORE_PATH
+          storePassword=$CM_KEYSTORE_PASSWORD
+          keyAlias=$CM_KEY_ALIAS
+          keyPassword=$CM_KEY_PASSWORD
+          EOF
+      - name: Dependencias
+        script: flutter pub get
+      - name: Build AAB
+        script: flutter build appbundle --release
+    artifacts:
+      - build/app/outputs/bundle/release/*.aab
+      - build/app/outputs/mapping/release/mapping.txt
+      - flutter_drive.log
+    publishing:
+      email:
+        recipients:
+          - joshuarojassaavedra@gmail.com
+        notify:
+          success: true
+          failure: true
+      google_play:
+        credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+        track: internal
+        submit_as_draft: true
+
+  # ---------------------------------------------------------------
+  # iOS: IPA firmado -> TestFlight
+  # ---------------------------------------------------------------
+  ios-release:
+    name: iOS Release
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    integrations:
+      app_store_connect: safe2biz_asc # Nombre de la integración de API key en Codemagic
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.dominiotech.safedosbizbvn
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+    scripts:
+      - name: Dependencias
+        script: |
+          flutter pub get
+          cd ios && pod install --repo-update
+      - name: Perfiles de firma
+        script: xcode-project use-profiles
+      - name: Build IPA
+        script: flutter build ipa --release --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    publishing:
+      email:
+        recipients:
+          - joshuarojassaavedra@gmail.com
+        notify:
+          success: true
+          failure: true
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
